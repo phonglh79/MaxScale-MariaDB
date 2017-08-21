@@ -1,0 +1,209 @@
+####MariaDB MaxScale #####
+
+10.20.30.21 db01
+10.20.30.22 db02
+10.20.30.23 db03
+10.20.30.25 MaxScale
+
+1. Install MariaDB
+#vi /etc/yum.repos.d/mariadb.repo
+[mariadb]
+name = MariaDB
+baseurl = http://yum.mariadb.org/10.1/centos7-amd64
+gpgkey=https://yum.mariadb.org/RPM-GPG-KEY-MariaDB
+gpgcheck=1
+
+#yum install MariaDB-server MariaDB-client 
+#yum install MariaDB-server MariaDB-client MariaDB-compat socat jemalloc  nc nmap
+
+# service mysql start
+# mysql_secure_installation ( 123123 pass mysql )
+
+mysql -u root -p
+mysql> DELETE FROM mysql.user WHERE user='';
+mysql> GRANT ALL ON *.* TO 'root'@'%' IDENTIFIED BY '123456';
+mysql> GRANT USAGE ON *.* to sst_user@'%' IDENTIFIED BY '123456';
+mysql> GRANT ALL PRIVILEGES on *.* to sst_user@'%';
+mysql> FLUSH PRIVILEGES;
+mysql> quit
+
+#service mysql stop
+
+2. Configure MariaDB galera
+
+vi /etc/my.cnf.d/server.cnf
+
+[galera]
+# Mandatory settings
+
+# Optional setting
+binlog_format=ROW
+default-storage-engine=innodb
+innodb_autoinc_lock_mode=2
+innodb_locks_unsafe_for_binlog=1
+query_cache_size = 0
+query_cache_type=0
+bind-address=0.0.0.0
+datadir=/var/lib/mysql
+innodb_log_file_size=100M
+innodb_file_per_table
+innodb_flush_log_at_trx_commit=2
+
+## Replicate
+wsrep_provider=/usr/lib64/galera/libgalera_smm.so
+wsrep_cluster_address="gcomm://10.20.30.21,10.20.30.22,10.20.30.23"
+wsrep_cluster_name='MariaDB_Cluster'
+wsrep_node_address='10.20.30.21'
+wsrep_node_name='db01'
+wsrep_sst_method=rsync
+wsrep_sst_auth=sst_user:123456
+
+##Logging
+log-error = /var/log/mysql-err.log
+#slow-query-log-file = /var/log/mysql_slow.log
+#slow_query_log = 1
+#long_query_time = 2
+#log-queries-not-using-indexes
+#expire_logs_days = 4
+#log-bin=mysql-bin
+
+## Start cluster
+node1
+#service mysql start --wsrep-new-cluster ( MariaDB 10.1.x tro ve sau, lenh nay se bị loi )
+[ERROR] WSREP: gcs/src/gcs_core.cpp:gcs_core_open():208: Failed to open backend connection: -110 (Connection timed out)
+Start bang lenh nay
+#galera_new_cluster
+
+node2, node3
+# service mysql start
+
+## Truong hop 3 node cluster deu off, thi node off cuoi cung se start lại
+galera_new_cluster
+Mot trong cac stop off thi start lai binh thuong bang 
+#service mysql start
+
+3. Install MaxScale
+[root@maxscale ~]# wget https://downloads.mariadb.com/MaxScale/2.0.5/rhel/7/x86_64/maxscale-2.0.5-1.rhel.7.x86_64.rpm
+
+
+[root@maxscale ~]# rpm -ivh maxscale-2.0.5-1.rhel.7.x86_64.rpm
+
+Configure
+[root@maxscale ~]# vi /etc/maxscale.cnf
+
+[maxscale]
+threads=4
+
+[Galera Monitor]
+type=monitor
+module=galeramon
+servers=db01,db02,db03
+user=sst_user
+passwd=123456
+monitor_interval=10000
+disable_master_failback=1
+
+[qla]
+type=filter
+module=qlafilter
+options=/tmp/QueryLog
+
+[fetch]
+type=filter
+module=regexfilter
+match=fetch
+replace=select
+
+[RW]
+type=service
+router=readwritesplit
+servers=db01,db02,db03
+user=root
+passwd=123456
+max_slave_connections=100%
+router_options=slave_selection_criteria=LEAST_CURRENT_OPERATIONS
+
+[RR]
+type=service
+router=readconnroute
+router_options=synced
+servers=db01,db02,db03
+user=root
+passwd=123456
+
+[Debug Interface]
+type=service
+router=debugcli
+
+[CLI]
+type=service
+router=cli
+
+[RWlistener]
+type=listener
+service=RW
+protocol=MySQLClient
+address=10.20.30.25
+port=3307
+
+[RRlistener]
+type=listener
+service=RR
+protocol=MySQLClient
+address=10.20.30.25
+port=3308
+
+[Debug Listener]
+type=listener
+service=Debug Interface
+protocol=telnetd
+address=127.0.0.1
+port=4442
+
+[CLI Listener]
+type=listener
+service=CLI
+protocol=maxscaled
+address=127.0.0.1
+port=6603
+
+[db01]
+type=server
+address=10.20.30.21
+port=3306
+protocol=MySQLBackend
+
+[db02]
+type=server
+address=10.20.30.22
+port=3306
+protocol=MySQLBackend
+
+[db03]
+type=server
+address=10.20.30.23
+port=3306
+protocol=MySQLBackend
+
+#systemctl start maxscale
+
+## Quản trị MaxScale
+
+[root@maxscale ~]# maxadmin -pmariadb
+MaxScale> list clients
+Client Connections
+-----------------+------------------+----------------------+------------
+ Client          | DCB              | Service              | Session
+-----------------+------------------+----------------------+------------
+ 10.20.30.21     |        0x1f1e480 | RW                   |  0x1f1fa60
+ 127.0.0.1       |        0x1f1fc30 | CLI                  |  0x1f1fe50
+-----------------+------------------+----------------------+------------
+
+MaxScale> show servers
+
+## Test MaxScale
+Tu may khac
+# mysql -h10.20.30.25 -P 3307 -usst_user -p
+
+Thu tao , xoa database va check tren cac node.
+
