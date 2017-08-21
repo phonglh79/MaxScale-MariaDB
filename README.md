@@ -1,1 +1,1 @@
-Các ghi chép về MaxScale 
+Các ghi chép về MaxScale MariaDB
